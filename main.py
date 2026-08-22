@@ -1,150 +1,117 @@
 import re
-import tkinter as tk
-from tkinter import messagebox
-from urllib.parse import urlparse
+import urllib.parse
+import requests
+import streamlit as st
+
+st.set_page_config(
+    page_title="Phishing URL Detector", page_icon="🛡️", layout="centered"
+)
 
 
-def analyze_url():
-    url = entry_url.get().strip()
+def unshorten_url(url):
+    if not url.startswith(("http://", "https://")):
+        target = "http://" + url
+    else:
+        target = url
 
-    if not url:
-        messagebox.showwarning("Warning", "Please enter a URL first!")
-        return
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.head(
+            target, allow_redirects=True, timeout=4, headers=headers
+        )
+        return response.url
+    except Exception:
+        return url
 
+
+def analyze_url(original_url):
     score = 0
     reasons = []
 
-    # 1. HTTPS Check
-    if not url.startswith("https://"):
-        score += 2
-        reasons.append("- Missing HTTPS protocol.")
+    final_url = unshorten_url(original_url)
+    was_redirected = original_url.strip() != final_url.strip()
 
-    # 2. IP Address Check
-    ip_pattern = r"(([01]?\d\d?|2[0-4]\d|25[0-5])\.){3}([01]?\d\d?|2[0-4]\d|25[0-5])"
-    if re.search(ip_pattern, url):
-        score += 3
-        reasons.append("- Uses direct IP address instead of domain.")
+    parsed = urllib.parse.urlparse(final_url)
+    domain = parsed.netloc or parsed.path.split("/")[0]
+    domain_only = domain.split(":")[0]
 
-    # 3. @ Symbol Check
-    if "@" in url:
-        score += 3
-        reasons.append("- Contains '@' symbol (misleading URL).")
-
-    # 4. URL Length Check
-    if len(url) > 75:
+    if not final_url.startswith("https://"):
         score += 1
-        reasons.append("- URL length is too long (> 75 chars).")
+        reasons.append((
+            "Missing HTTPS Encryption",
+            "URL does not use secure HTTPS protocol.",
+            "High",
+        ))
 
-    # 5. Domain Hyphens Check
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc
-    if domain.count("-") > 2:
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", domain_only):
         score += 2
-        reasons.append("- Domain contains too many hyphens (-).")
+        reasons.append((
+            "Direct IP Address Usage",
+            "Uses raw IP address instead of domain name.",
+            "Critical",
+        ))
 
-    # 6. URL Shorteners Check
-    shorteners = ["bit.ly", "tinyurl.com", "is.gd", "buff.ly", "ow.ly"]
-    if any(shortener in domain for shortener in shorteners):
+    if "@" in final_url:
         score += 2
-        reasons.append("- Uses URL shortening service.")
+        reasons.append((
+            "Contains '@' Symbol",
+            "Obfuscates actual destination.",
+            "Critical",
+        ))
 
-    # Result & Color setup
-    if score == 0:
-        status_text = "SAFE: URL appears to be safe."
-        status_color = "#2ecc71"
-    elif score < 3:
-        status_text = "SUSPICIOUS: Moderate risk detected."
-        status_color = "#f39c12"
-    else:
-        status_text = "DANGER: High risk Phishing URL!"
-        status_color = "#e74c3c"
+    if len(final_url) > 75:
+        score += 1
+        reasons.append((
+            "Abnormal Length",
+            f"URL length ({len(final_url)} chars) exceeds 75 limit.",
+            "Medium",
+        ))
 
-    # Display Result
-    lbl_result.config(text=status_text, fg=status_color)
+    if domain_only.count("-") > 2:
+        score += 1
+        reasons.append((
+            "Excessive Hyphens",
+            f"Domain contains {domain_only.count('-')} hyphens.",
+            "Medium",
+        ))
 
-    # Display Reasons
-    text_reasons.config(state="normal")
-    text_reasons.delete("1.0", tk.END)
-    if reasons:
-        text_reasons.insert(
-            tk.END, "Detection Reasons:\n\n" + "\n".join(reasons)
-        )
-    else:
-        text_reasons.insert(tk.END, "No risk factors found.")
-    text_reasons.config(state="disabled")
+    shorteners = ["bit.ly", "tinyurl.com", "goo.gl", "ow.ly", "t.co", "is.gd"]
+    if any(s in original_url.lower() for s in shorteners) or was_redirected:
+        score += 2
+        reasons.append((
+            "URL Shortener / Redirection Detected",
+            f"Concealed destination unmasked -> Resolved to: {final_url}",
+            "High",
+        ))
+
+    status = (
+        "SAFE" if score == 0 else ("SUSPICIOUS" if score <= 2 else "PHISHING")
+    )
+    return status, score, reasons, final_url, was_redirected
 
 
-# Main Window Setup
-root = tk.Tk()
-root.title("Phishing Detection System")
-root.geometry("380x520")
-root.configure(bg="#1e1e1e")
+st.title("🛡️ Phishing URL Detection System")
+st.caption("Advanced Real-time Redirection & Heuristic Analysis")
 
-# Title
-lbl_title = tk.Label(
-    root,
-    text="Phishing Detection System",
-    font=("Arial", 14, "bold"),
-    fg="white",
-    bg="#1e1e1e",
-)
-lbl_title.pack(pady=12)
+target_url = st.text_input("Enter Target URL:")
 
-# Input Prompt
-lbl_prompt = tk.Label(
-    root,
-    text="Enter URL to analyze:",
-    font=("Arial", 10),
-    fg="#ccc",
-    bg="#1e1e1e",
-)
-lbl_prompt.pack(pady=5)
+if st.button("Analyze URL", type="primary"):
+    if target_url:
+        with st.spinner("Unmasking URL & Analyzing..."):
+            status, score, reasons, final_url, was_redirected = analyze_url(
+                target_url
+            )
 
-entry_url = tk.Entry(
-    root, font=("Arial", 11), width=32, justify="center", bd=2
-)
-entry_url.pack(pady=5)
+        if was_redirected:
+            st.info(f"🔗 **Unmasked Target Destination:** `{final_url}`")
 
-# Check Button
-btn_check = tk.Button(
-    root,
-    text="Analyze URL",
-    font=("Arial", 10, "bold"),
-    bg="#3498db",
-    fg="white",
-    command=analyze_url,
-    padx=10,
-    pady=5,
-)
-btn_check.pack(pady=12)
+        if status == "SAFE":
+            st.success(f"Result: **{status}** (Risk Score: {score})")
+        elif status == "SUSPICIOUS":
+            st.warning(f"Result: **{status}** (Risk Score: {score})")
+        else:
+            st.error(f"Result: **{status}** (Risk Score: {score})")
 
-# Result Label
-lbl_result = tk.Label(
-    root, text="", font=("Arial", 11, "bold"), bg="#1e1e1e", wraplength=340
-)
-lbl_result.pack(pady=8)
-
-# Reasons Text Area
-text_reasons = tk.Text(
-    root,
-    height=8,
-    width=38,
-    font=("Arial", 9),
-    bg="#2d2d2d",
-    fg="white",
-    bd=0,
-)
-text_reasons.pack(pady=10)
-text_reasons.config(state="disabled")
-
-# Footer / Info
-lbl_footer = tk.Label(
-    root,
-    text="Student: Akram Hussein | ID: 3230606118",
-    font=("Arial", 8),
-    fg="#888",
-    bg="#1e1e1e",
-)
-lbl_footer.pack(side="bottom", pady=10)
-
-root.mainloop()
+        for title, desc, severity in reasons:
+            st.markdown(f"- **{title}** [{severity}]: {desc}")
+        
